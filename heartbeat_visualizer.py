@@ -15,10 +15,16 @@ class HeartbeatVisualizer:
         pygame.display.set_caption("Heart Rate Monitor")
         
         # Heart rate configuration
-        self.hr_min = hr_min
-        self.hr_max = hr_max
+        self.hr_min_base = hr_min  # Base minimum (20)
+        self.hr_max_base = hr_max  # Base maximum (180)
+        self.hr_min = hr_min  # Current dynamic minimum
+        self.hr_max = hr_max  # Current dynamic maximum
         self.hr_safe_min = 60  # Green zone start
         self.hr_safe_max = 80  # Green zone end
+        
+        # Dynamic range settings
+        self.dynamic_range_padding = 20  # ±20 BPM around current HR
+        self.range_smoothing = 0.1  # How quickly ranges adjust (0.1 = slow, 1.0 = instant)
         
         # Visual settings
         self.bg_color = (5, 5, 15)  # Dark blue/black
@@ -31,6 +37,10 @@ class HeartbeatVisualizer:
         self.time_history = deque(maxlen=width // 2)
         self.current_hr = 0
         self.last_beat_time = 0
+        
+        # ECG data storage
+        self.ecg_history = deque(maxlen=width * 4)  # Store more ECG points for smooth waveform
+        self.ecg_enabled = False
         
         # Animation
         self.glow_intensity = 0
@@ -59,9 +69,39 @@ class HeartbeatVisualizer:
             # More intense glow for higher HR
             self.glow_intensity = hr_normalized * 0.8 + 0.2
             
+        # Update dynamic range based on current HR
+        if hr > 0:
+            self.update_dynamic_range(hr)
+            
         # Trigger pulse animation
         if rr_intervals and len(rr_intervals) > 0:
             self.last_beat_time = current_time
+    
+    def update_dynamic_range(self, current_hr: int):
+        """Update dynamic HR range based on current heart rate"""
+        # Calculate target range (current HR ± padding)
+        target_min = max(self.hr_min_base, current_hr - self.dynamic_range_padding)
+        target_max = min(self.hr_max_base, current_hr + self.dynamic_range_padding)
+        
+        # Smooth transition to new range to avoid jarring jumps
+        self.hr_min += (target_min - self.hr_min) * self.range_smoothing
+        self.hr_max += (target_max - self.hr_max) * self.range_smoothing
+        
+        # Ensure minimum range span of 40 BPM for visual clarity
+        if self.hr_max - self.hr_min < 40:
+            center = (self.hr_min + self.hr_max) / 2
+            self.hr_min = center - 20
+            self.hr_max = center + 20
+            
+            # Clamp to base limits
+            self.hr_min = max(self.hr_min_base, self.hr_min)
+            self.hr_max = min(self.hr_max_base, self.hr_max)
+    
+    def update_ecg_data(self, ecg_samples: list):
+        """Update ECG data"""
+        if ecg_samples:
+            self.ecg_enabled = True
+            self.ecg_history.extend(ecg_samples)
     
     def get_hr_color(self, hr: int) -> tuple:
         """Get color based on heart rate with smooth gradient: purple → blue → green → yellow → orange → red → pink"""
@@ -108,11 +148,14 @@ class HeartbeatVisualizer:
     
     def draw_grid(self):
         """Draw background grid like a hospital monitor"""
-        # Use full range 50-180 BPM
+        # Use dynamic range
         margin = 40  # Top and bottom margin
         
-        # Horizontal lines (HR levels) - full range
-        for hr in range(self.hr_min, self.hr_max + 1, 10):
+        # Horizontal lines (HR levels) - dynamic range
+        grid_start = int(self.hr_min // 10) * 10  # Round down to nearest 10
+        grid_end = int(self.hr_max // 10 + 1) * 10  # Round up to nearest 10
+        
+        for hr in range(grid_start, grid_end + 1, 5):  # Every 5 BPM for more detail
             # Calculate y position using full range
             y = self.height - margin - ((hr - self.hr_min) / (self.hr_max - self.hr_min)) * (self.height - 2 * margin)
             
@@ -124,11 +167,12 @@ class HeartbeatVisualizer:
                 line_surf.fill(self.grid_color)
                 self.screen.blit(line_surf, (0, int(y)))
                 
-                # Label major grid lines with colors based on HR zones
-                if hr % 20 == 0:
+                # Label grid lines with colors based on HR zones
+                if hr % 10 == 0:  # Label every 10 BPM
                     label_color = self.get_hr_color(hr)
-                    label = self.font_medium.render(f"{hr}", True, label_color)
-                    self.screen.blit(label, (10, int(y) - 12))
+                    font_size = self.font_medium if hr % 20 == 0 else self.font_small
+                    label = font_size.render(f"{hr}", True, label_color)
+                    self.screen.blit(label, (10, int(y) - 8))
         
         # Vertical time lines
         for i in range(0, self.width, 30):  # Closer vertical lines for 2x speed
@@ -137,6 +181,11 @@ class HeartbeatVisualizer:
             line_surf.set_alpha(alpha)
             line_surf.fill(self.grid_color)
             self.screen.blit(line_surf, (i, 0))
+        
+        # Add dynamic range indicator
+        range_text = f"Range: {int(self.hr_min)}-{int(self.hr_max)} BPM"
+        range_surface = self.font_small.render(range_text, True, (100, 200, 100))
+        self.screen.blit(range_surface, (self.width - range_surface.get_width() - 20, self.height - 30))
     
     def draw_heartbeat_line(self):
         """Draw the heartbeat waveform with rainbow coloring"""
@@ -192,6 +241,78 @@ class HeartbeatVisualizer:
                 
                 self.screen.blit(line_surf, (0, 0))
     
+    def draw_ecg_waveform(self):
+        """Draw ECG waveform at the bottom of the screen"""
+        if not self.ecg_enabled or len(self.ecg_history) < 2:
+            return
+        
+        # ECG display area (bottom 80 pixels)
+        ecg_height = 80
+        ecg_y_start = self.height - ecg_height
+        ecg_y_center = ecg_y_start + ecg_height // 2
+        
+        # Draw ECG background
+        ecg_bg = pygame.Surface((self.width, ecg_height))
+        ecg_bg.set_alpha(40)
+        ecg_bg.fill((0, 20, 0))  # Dark green background
+        self.screen.blit(ecg_bg, (0, ecg_y_start))
+        
+        # Draw ECG grid lines
+        for i in range(0, self.width, 60):
+            pygame.draw.line(self.screen, (0, 30, 0), (i, ecg_y_start), (i, self.height), 1)
+        
+        # Draw center line
+        pygame.draw.line(self.screen, (0, 50, 0), (0, ecg_y_center), (self.width, ecg_y_center), 1)
+        
+        # Convert ECG samples to screen coordinates
+        points = []
+        ecg_samples = list(self.ecg_history)
+        
+        # Normalize ECG values
+        if ecg_samples:
+            min_val = min(ecg_samples)
+            max_val = max(ecg_samples)
+            val_range = max_val - min_val if max_val != min_val else 1
+            
+            # Take recent samples to fit screen width
+            samples_to_show = min(len(ecg_samples), self.width * 2)
+            recent_samples = ecg_samples[-samples_to_show:]
+            
+            for i, sample in enumerate(recent_samples):
+                # X position (right to left scrolling)
+                x = self.width - (len(recent_samples) - i) // 2
+                
+                # Y position (normalized and inverted for display)
+                normalized = (sample - min_val) / val_range
+                y = ecg_y_center - (normalized - 0.5) * (ecg_height - 20)
+                
+                if 0 <= x < self.width:
+                    points.append((x, y))
+        
+        # Draw ECG line with glow effect
+        if len(points) > 1:
+            # Multiple passes for glow effect
+            for thickness in range(3, 0, -1):
+                alpha = int(150 / thickness)
+                color = (0, 255, 100) if thickness == 1 else (0, 150, 50)  # Bright green ECG
+                
+                line_surf = pygame.Surface((self.width, ecg_height))
+                line_surf.set_alpha(alpha)
+                line_surf.fill((0, 0, 0))
+                line_surf.set_colorkey((0, 0, 0))
+                
+                # Adjust points for local surface
+                local_points = [(x, y - ecg_y_start) for x, y in points]
+                
+                if len(local_points) > 1:
+                    pygame.draw.lines(line_surf, color, False, local_points, thickness)
+                
+                self.screen.blit(line_surf, (0, ecg_y_start))
+        
+        # ECG label
+        ecg_label = self.font_small.render("ECG", True, (0, 200, 100))
+        self.screen.blit(ecg_label, (10, ecg_y_start + 5))
+    
     def draw_hud(self):
         """Draw HUD with current HR"""
         # Current HR display - just the number and BPM, no background
@@ -218,6 +339,7 @@ class HeartbeatVisualizer:
         # Draw components
         self.draw_grid()
         self.draw_heartbeat_line()
+        self.draw_ecg_waveform()  # Add ECG display
         self.draw_hud()
         
         # Update display

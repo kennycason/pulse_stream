@@ -11,7 +11,7 @@ class HeartbeatVisualizer:
         # Display settings
         self.width = width
         self.height = height
-        self.screen = pygame.display.set_mode((width, height))
+        self.screen = pygame.display.set_mode((width, height), pygame.RESIZABLE)
         pygame.display.set_caption("Heart Rate Monitor")
         
         # Heart rate configuration
@@ -148,44 +148,70 @@ class HeartbeatVisualizer:
     
     def draw_grid(self):
         """Draw background grid like a hospital monitor"""
-        # Use dynamic range
-        margin = 40  # Top and bottom margin
+        # Adaptive margins and spacing based on window height
+        margin = max(20, self.height // 10)  # Responsive margin
+        
+        # Calculate optimal label spacing based on window height
+        available_height = self.height - 2 * margin
+        hr_range = self.hr_max - self.hr_min
+        
+        # Determine label interval based on available space (readable spacing)
+        if available_height < 150:  # Very small window
+            label_interval = 20  # Every 20 BPM
+            grid_interval = 10   # Grid every 10 BPM
+            font_to_use = pygame.font.Font(None, 32)  # Readable font
+        elif available_height < 250:  # Small window
+            label_interval = 10  # Every 10 BPM
+            grid_interval = 10   # Grid every 10 BPM
+            font_to_use = pygame.font.Font(None, 36)  # Bigger font
+        elif available_height < 400:  # Medium window
+            label_interval = 10  # Every 10 BPM
+            grid_interval = 5    # Grid every 5 BPM
+            font_to_use = pygame.font.Font(None, 40)  # Large font
+        else:  # Large window
+            label_interval = 10  # Every 10 BPM
+            grid_interval = 5    # Grid every 5 BPM
+            font_to_use = pygame.font.Font(None, 48)  # Extra large font
+        
+        # Calculate minimum pixels between labels (generous spacing)
+        min_label_spacing = 24  # Doubled from 12 to 24
+        max_labels = available_height // min_label_spacing
+        if hr_range / label_interval > max_labels:
+            # Too many labels, increase interval
+            label_interval = max(5, int(hr_range / max_labels / 5) * 5)  # Increment by 5s instead of 10s
         
         # Horizontal lines (HR levels) - dynamic range
-        grid_start = int(self.hr_min // 10) * 10  # Round down to nearest 10
-        grid_end = int(self.hr_max // 10 + 1) * 10  # Round up to nearest 10
+        grid_start = int(self.hr_min // grid_interval) * grid_interval
+        grid_end = int(self.hr_max // grid_interval + 1) * grid_interval
         
-        for hr in range(grid_start, grid_end + 1, 5):  # Every 5 BPM for more detail
+        for hr in range(grid_start, grid_end + 1, grid_interval):
             # Calculate y position using full range
-            y = self.height - margin - ((hr - self.hr_min) / (self.hr_max - self.hr_min)) * (self.height - 2 * margin)
+            y = self.height - margin - ((hr - self.hr_min) / (self.hr_max - self.hr_min)) * available_height
             
             if margin <= y <= self.height - margin:
-                alpha = 120 if hr % 20 == 0 else 60
+                alpha = 120 if hr % (label_interval * 2) == 0 else 60
                 # Create a surface for alpha blending
                 line_surf = pygame.Surface((self.width, 1))
                 line_surf.set_alpha(alpha)
                 line_surf.fill(self.grid_color)
                 self.screen.blit(line_surf, (0, int(y)))
                 
-                # Label grid lines with colors based on HR zones
-                if hr % 10 == 0:  # Label every 10 BPM
+                # Label grid lines with adaptive spacing
+                if hr % label_interval == 0:
                     label_color = self.get_hr_color(hr)
-                    font_size = self.font_medium if hr % 20 == 0 else self.font_small
-                    label = font_size.render(f"{hr}", True, label_color)
-                    self.screen.blit(label, (10, int(y) - 8))
+                    label = font_to_use.render(f"{hr}", True, label_color)
+                    # Adjust label position to not overlap
+                    label_y = max(margin // 2, min(int(y) - label.get_height() // 2, self.height - margin // 2 - label.get_height()))
+                    self.screen.blit(label, (10, label_y))
         
-        # Vertical time lines
-        for i in range(0, self.width, 30):  # Closer vertical lines for 2x speed
-            alpha = 80 if i % 60 == 0 else 40
+        # Vertical time lines (adaptive to width)
+        vertical_spacing = max(20, self.width // 40)  # Responsive vertical line spacing
+        for i in range(0, self.width, vertical_spacing):
+            alpha = 80 if i % (vertical_spacing * 2) == 0 else 40
             line_surf = pygame.Surface((1, self.height))
             line_surf.set_alpha(alpha)
             line_surf.fill(self.grid_color)
             self.screen.blit(line_surf, (i, 0))
-        
-        # Add dynamic range indicator
-        range_text = f"Range: {int(self.hr_min)}-{int(self.hr_max)} BPM"
-        range_surface = self.font_small.render(range_text, True, (100, 200, 100))
-        self.screen.blit(range_surface, (self.width - range_surface.get_width() - 20, self.height - 30))
     
     def draw_heartbeat_line(self):
         """Draw the heartbeat waveform with rainbow coloring"""
@@ -193,7 +219,8 @@ class HeartbeatVisualizer:
             return
             
         current_time = time.time()
-        margin = 40
+        margin = max(20, self.height // 10)  # Use same adaptive margin as grid
+        available_height = self.height - 2 * margin
         
         # Create segments with individual colors
         segments = []
@@ -201,8 +228,8 @@ class HeartbeatVisualizer:
             # Much faster movement: map fewer data points across full screen width
             x = self.width - (len(self.hr_history) - i) * 2
             
-            # Use full range positioning
-            base_y = self.height - margin - ((hr - self.hr_min) / (self.hr_max - self.hr_min)) * (self.height - 2 * margin)
+            # Use full range positioning with adaptive margins
+            base_y = self.height - margin - ((hr - self.hr_min) / (self.hr_max - self.hr_min)) * available_height
             
             # Add heartbeat pulse effect
             pulse_amplitude = 0
@@ -354,6 +381,25 @@ class HeartbeatVisualizer:
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     return False
+            elif event.type == pygame.VIDEORESIZE:
+                # Handle window resize
+                self.width = event.w
+                self.height = event.h
+                self.screen = pygame.display.set_mode((self.width, self.height), pygame.RESIZABLE)
+                
+                # Update data storage for new width
+                new_hr_maxlen = self.width // 2
+                new_ecg_maxlen = self.width * 4
+                
+                # Preserve existing data while updating maxlen
+                old_hr_data = list(self.hr_history)
+                old_time_data = list(self.time_history)
+                old_ecg_data = list(self.ecg_history)
+                
+                self.hr_history = deque(old_hr_data, maxlen=new_hr_maxlen)
+                self.time_history = deque(old_time_data, maxlen=new_hr_maxlen)
+                self.ecg_history = deque(old_ecg_data, maxlen=new_ecg_maxlen)
+                
         return True
     
     def run_demo(self):
